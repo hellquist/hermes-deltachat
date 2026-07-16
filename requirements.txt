@@ -1,0 +1,2 @@
+deltabot-cli>=0.1.0
+deltachat2>=1.0.0
