@@ -230,12 +230,12 @@ class DeltaChatAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
-            from deltachat2 import MsgData
+            from deltachat2 import MessageData
 
-            msg_data = MsgData(text=content)
+            msg_data = MessageData(text=content)
 
             if reply_to:
-                msg_data.quote_id = int(reply_to)
+                msg_data.quoted_message_id = int(reply_to)
 
             msg_id = self._rpc.send_msg(
                 self._acc_id, int(chat_id), msg_data
