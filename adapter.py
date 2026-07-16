@@ -128,6 +128,12 @@ class DeltaChatAdapter(BasePlatformAdapter):
             except Exception:
                 pass  # Non-critical, may already be set
 
+            # Enable MDN (read receipts) — required for green checkmarks
+            try:
+                self._rpc.set_config(self._acc_id, "mdns_enabled", "1")
+            except Exception:
+                pass  # Non-critical
+
             # Get bot address if not already set
             if not self.addr:
                 self.addr = self._rpc.get_config(self._acc_id, "addr") or ""
