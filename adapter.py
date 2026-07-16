@@ -40,7 +40,8 @@ from gateway.platforms.base import (
 )
 from gateway.config import Platform, PlatformConfig
 
-from deltachat2.types import EventTypeIncomingMsg
+from deltachat2.types import EventTypeIncomingMsg, EventTypeChatModified
+from deltachat2 import MessageData
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,11 @@ class DeltaChatAdapter(BasePlatformAdapter):
                 if etype not in ("EventTypeInfo", "str"):
                     logger.info("Delta Chat event: %s", etype)
 
+                # Handle new chats / contact requests — accept and send welcome
+                if isinstance(event.event, EventTypeChatModified):
+                    await self._handle_new_chat(event.event.chat_id)
+                    continue
+
                 # Handle incoming messages
                 if isinstance(event.event, EventTypeIncomingMsg):
                     # Fetch the message
@@ -225,6 +231,26 @@ class DeltaChatAdapter(BasePlatformAdapter):
                 logger.warning("Delta Chat poll error: %s", e)
                 await asyncio.sleep(2)
 
+    async def _handle_new_chat(self, chat_id: int) -> None:
+        """Handle a new chat — accept if contact request and send welcome message."""
+        if not self._rpc or self._acc_id is None:
+            return
+
+        try:
+            chat = self._rpc.get_basic_chat_info(self._acc_id, chat_id)
+            if chat is None:
+                return
+
+            if chat.is_contact_request:
+                logger.info("Accepting contact request for chat %s", chat_id)
+                self._rpc.accept_chat(self._acc_id, chat_id)
+                # Send welcome message to open the chat
+                msg_data = MessageData(text="Hej! Jag är Argus, Mathias personliga AI-assistent. Välkommen! 👋")
+                self._rpc.send_msg(self._acc_id, chat_id, msg_data)
+                logger.info("Sent welcome message to chat %s", chat_id)
+        except Exception as e:
+            logger.warning("Error handling new chat %s: %s", chat_id, e)
+
     # ── Sending ───────────────────────────────────────────────────
 
     async def send(
@@ -239,8 +265,6 @@ class DeltaChatAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
-            from deltachat2 import MessageData
-
             msg_data = MessageData(text=content)
 
             if reply_to:
