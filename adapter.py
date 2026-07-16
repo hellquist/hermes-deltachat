@@ -121,6 +121,12 @@ class DeltaChatAdapter(BasePlatformAdapter):
             # Start IO (connect to IMAP/SMTP)
             self._rpc.start_io(self._acc_id)
 
+            # Configure as bot (auto-accept contact requests)
+            try:
+                self._rpc.set_config(self._acc_id, "bot", "1")
+            except Exception:
+                pass  # Non-critical, may already be set
+
             # Get bot address if not already set
             if not self.addr:
                 self.addr = self._rpc.get_config(self._acc_id, "addr") or ""
@@ -301,9 +307,6 @@ def _env_enablement() -> dict | None:
         return None
 
     seed = {"config_dir": DEFAULT_CONFIG_DIR}
-    home = os.getenv("DELTACHAT_HOME_CHANNEL", "").strip()
-    if home:
-        seed["home_channel"] = {"chat_id": home, "name": "Home"}
     return seed
 
 
