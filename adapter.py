@@ -185,36 +185,39 @@ class DeltaChatAdapter(BasePlatformAdapter):
                 if event is None:
                     continue
 
-                # We only care about incoming messages
-                if not isinstance(event.event, EventTypeIncomingMsg):
-                    continue
+                # Log all non-info events for debugging
+                etype = type(event.event).__name__
+                if etype not in ("EventTypeInfo", "str"):
+                    logger.info("Delta Chat event: %s", etype)
 
-                # Fetch the message
-                msg = self._rpc.get_message(self._acc_id, event.event.msg_id)
-                if msg is None:
-                    continue
+                # Handle incoming messages
+                if isinstance(event.event, EventTypeIncomingMsg):
+                    # Fetch the message
+                    msg = self._rpc.get_message(self._acc_id, event.event.msg_id)
+                    if msg is None:
+                        continue
 
-                # Deduplicate
-                if msg.id in self._known_messages:
-                    continue
-                self._known_messages.add(msg.id)
+                    # Deduplicate
+                    if msg.id in self._known_messages:
+                        continue
+                    self._known_messages.add(msg.id)
 
-                # Get chat info
-                chat = self._rpc.get_basic_chat_info(self._acc_id, msg.chat_id)
-                if chat is None:
-                    continue
+                    # Get chat info
+                    chat = self._rpc.get_basic_chat_info(self._acc_id, msg.chat_id)
+                    if chat is None:
+                        continue
 
-                # Build Hermes message event
-                hermes_event = MessageEvent(
-                    message_id=str(msg.id),
-                    chat_id=str(msg.chat_id),
-                    sender_id=str(msg.from_id or msg.chat_id),
-                    text=msg.text or "",
-                    type=MessageType.TEXT,
-                    raw=msg,
-                )
+                    # Build Hermes message event
+                    hermes_event = MessageEvent(
+                        message_id=str(msg.id),
+                        chat_id=str(msg.chat_id),
+                        sender_id=str(msg.from_id or msg.chat_id),
+                        text=msg.text or "",
+                        type=MessageType.TEXT,
+                        raw=msg,
+                    )
 
-                await self.handle_message(hermes_event)
+                    await self.handle_message(hermes_event)
 
             except asyncio.CancelledError:
                 break
