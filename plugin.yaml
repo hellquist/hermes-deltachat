@@ -4,15 +4,7 @@ kind: platform
 version: 1.0.0
 description: Delta Chat platform adapter for Hermes — E2EE messaging over email (Autocrypt)
 author: hellquist
-requires_env:
-  - name: DELTACHAT_CONFIG_DIR
-    description: "Path to bot config directory (default: ~/.config/hermes-bot)"
-    prompt: "Config directory"
-    password: false
 optional_env:
-  - name: DELTACHAT_ADDR
-    description: "Bot email address (for display, auto-detected if omitted)"
-    password: false
   - name: DELTACHAT_HOME_CHANNEL
     description: "Default channel for cron delivery (your email address)"
     password: false

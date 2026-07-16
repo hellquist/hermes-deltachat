@@ -10,14 +10,18 @@ is created with `deltabot-cli init DCACCOUNT:https://nine.testrun.org/new`.
 
 Usage:
   1. Create a bot account:
-     python -c "from deltabot_cli import BotCli; BotCli('hermes-bot').start()" \\
+     python -c "from deltabot_cli import BotCli; BotCli('hermes-bot').start()" \
          init DCACCOUNT:https://nine.testrun.org/new
 
   2. Get the invite link:
      python -c "from deltabot_cli import BotCli; BotCli('hermes-bot').start()" link
 
-  3. Set DELTACHAT_CONFIG_DIR in .env (default: ~/.config/hermes-bot)
-  4. Enable in config.yaml: gateway.platforms.deltachat.enabled: true
+  3. Enable in config.yaml:
+       gateway:
+         platforms:
+           deltachat:
+             enabled: true
+             config_dir: /home/mathias/.config/hermes-bot  # optional, default: ~/.config/hermes-bot
 """
 
 from __future__ import annotations
@@ -38,6 +42,9 @@ from gateway.config import Platform, PlatformConfig
 
 logger = logging.getLogger(__name__)
 
+# Default config directory — no env vars needed
+DEFAULT_CONFIG_DIR = str(Path.home() / ".config" / "hermes-bot")
+
 # ── Adapter ──────────────────────────────────────────────────────────
 
 class DeltaChatAdapter(BasePlatformAdapter):
@@ -53,20 +60,13 @@ class DeltaChatAdapter(BasePlatformAdapter):
         extra = config.extra or {}
 
         # Config directory — where the bot account lives
-        self.config_dir = (
-            os.getenv("DELTACHAT_CONFIG_DIR")
-            or extra.get("config_dir", "")
-            or str(Path.home() / ".config" / "hermes-bot")
-        )
+        # Can be set in config.yaml under gateway.platforms.deltachat.extra.config_dir
+        self.config_dir = extra.get("config_dir", "") or DEFAULT_CONFIG_DIR
 
         # Bot address (for display/identification)
-        self.addr = (
-            os.getenv("DELTACHAT_ADDR") or extra.get("addr", "")
-        )
+        self.addr = extra.get("addr", "")
 
-        self.home_channel = (
-            os.getenv("DELTACHAT_HOME_CHANNEL") or extra.get("home_channel", "")
-        )
+        self.home_channel = extra.get("home_channel", "")
 
         self._rpc: Any = None
         self._transport: Any = None
@@ -273,11 +273,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
 
 def check_requirements() -> bool:
     """Check if Delta Chat dependencies are available."""
-    config_dir = os.getenv("DELTACHAT_CONFIG_DIR", "")
-    if not config_dir:
-        config_dir = str(Path.home() / ".config" / "hermes-bot")
-    accounts_dir = os.path.join(config_dir, "accounts")
-
+    accounts_dir = os.path.join(DEFAULT_CONFIG_DIR, "accounts")
     if not os.path.isdir(accounts_dir):
         return False
 
@@ -291,26 +287,18 @@ def check_requirements() -> bool:
 def validate_config(config) -> bool:
     """Validate platform configuration."""
     extra = getattr(config, "extra", None) or {}
-    config_dir = (
-        os.getenv("DELTACHAT_CONFIG_DIR")
-        or extra.get("config_dir", "")
-        or str(Path.home() / ".config" / "hermes-bot")
-    )
+    config_dir = extra.get("config_dir", "") or DEFAULT_CONFIG_DIR
     accounts_dir = os.path.join(config_dir, "accounts")
     return os.path.isdir(accounts_dir)
 
 
 def _env_enablement() -> dict | None:
     """Seed PlatformConfig.extra from env vars."""
-    config_dir = os.getenv("DELTACHAT_CONFIG_DIR", "").strip()
-    if not config_dir:
-        config_dir = str(Path.home() / ".config" / "hermes-bot")
-
-    accounts_dir = os.path.join(config_dir, "accounts")
+    accounts_dir = os.path.join(DEFAULT_CONFIG_DIR, "accounts")
     if not os.path.isdir(accounts_dir):
         return None
 
-    seed = {"config_dir": config_dir}
+    seed = {"config_dir": DEFAULT_CONFIG_DIR}
     home = os.getenv("DELTACHAT_HOME_CHANNEL", "").strip()
     if home:
         seed["home_channel"] = {"chat_id": home, "name": "Home"}
@@ -325,7 +313,7 @@ def register(ctx):
         adapter_factory=lambda cfg: DeltaChatAdapter(cfg),
         check_fn=check_requirements,
         validate_config=validate_config,
-        required_env=["DELTACHAT_CONFIG_DIR"],
+        required_env=[],
         install_hint=(
             "1. pip install deltabot-cli deltachat2\n"
             "2. Create bot account:\n"
