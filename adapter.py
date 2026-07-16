@@ -21,7 +21,7 @@ Usage:
          platforms:
            deltachat:
              enabled: true
-             config_dir: /home/mathias/.config/hermes-bot  # optional, default: ~/.config/hermes-bot
+             config_dir: ~/.config/hermes-bot  # optional, default: ~/.config/hermes-bot
 """
 
 from __future__ import annotations
@@ -273,7 +273,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
                 logger.info("Accepting contact request for chat %s", chat_id)
                 self._rpc.accept_chat(self._acc_id, chat_id)
                 # Send welcome message to open the chat
-                msg_data = MessageData(text="Hej! Jag är Argus, Mathias personliga AI-assistent. Välkommen! 👋")
+                msg_data = MessageData(text="Hej! Jag är en Hermes AI-assistent. Välkommen! 👋")
                 self._rpc.send_msg(self._acc_id, chat_id, msg_data)
                 logger.info("Sent welcome message to chat %s", chat_id)
         except Exception as e:
