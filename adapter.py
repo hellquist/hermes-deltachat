@@ -219,6 +219,11 @@ class DeltaChatAdapter(BasePlatformAdapter):
                     if chat is None:
                         continue
 
+                    # Accept contact request if needed — required for MDN (read receipts)
+                    if chat.is_contact_request:
+                        logger.info("Accepting contact request for chat %s", msg.chat_id)
+                        self._rpc.accept_chat(self._acc_id, msg.chat_id)
+
                     # Build Hermes message event
                     from gateway.session import SessionSource
                     from gateway.config import Platform
