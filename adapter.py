@@ -104,6 +104,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
                 accounts_dir=accounts_dir,
                 rpc_executable="deltachat-rpc-server",
             )
+            self._transport.start()
             self._rpc = Rpc(self._transport)
 
             # Get the first (and only) account
