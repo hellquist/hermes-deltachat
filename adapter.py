@@ -35,14 +35,17 @@ logger = logging.getLogger(__name__)
 # ── Helpers ──────────────────────────────────────────────────────────
 
 def _find_deltachat_core() -> str | None:
-    """Locate the deltachat-core binary."""
+    """Locate the deltachat-rpc-server binary."""
     # Common locations
     candidates = [
+        "deltachat-rpc-server",
         "deltachat-core",
         "deltachat_rpc_server",
         # pip-installed entry points
+        str(Path(sys.prefix) / "bin" / "deltachat-rpc-server"),
         str(Path(sys.prefix) / "bin" / "deltachat-core"),
-        str(Path.home() / ".local" / "bin" / "deltachat-core"),
+        str(Path.home() / ".local" / "bin" / "deltachat-rpc-server"),
+        "/usr/bin/deltachat-rpc-server",
     ]
     for c in candidates:
         try:
