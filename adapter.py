@@ -235,6 +235,13 @@ class DeltaChatAdapter(BasePlatformAdapter):
 
                     await self.handle_message(hermes_event)
 
+                    # Mark message as seen — sends MDN read receipt
+                    # so the sender sees two green checkmarks in DeltaChat
+                    try:
+                        self._rpc.markseen_msgs(self._acc_id, [msg.id])
+                    except Exception:
+                        pass  # Non-critical
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
