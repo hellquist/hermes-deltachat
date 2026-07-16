@@ -214,13 +214,23 @@ class DeltaChatAdapter(BasePlatformAdapter):
                         continue
 
                     # Build Hermes message event
-                    hermes_event = MessageEvent(
-                        message_id=str(msg.id),
+                    from gateway.session import SessionSource
+                    from gateway.config import Platform
+
+                    source = SessionSource(
+                        platform=Platform("deltachat"),
                         chat_id=str(msg.chat_id),
-                        sender_id=str(msg.from_id or msg.chat_id),
+                        user_id=str(msg.from_id),
+                        user_name=str(getattr(msg.sender, "display_name", "") or ""),
+                        chat_type="dm",
+                    )
+
+                    hermes_event = MessageEvent(
                         text=msg.text or "",
-                        type=MessageType.TEXT,
-                        raw=msg,
+                        message_type=MessageType.TEXT,
+                        source=source,
+                        raw_message=msg,
+                        message_id=str(msg.id),
                     )
 
                     await self.handle_message(hermes_event)
