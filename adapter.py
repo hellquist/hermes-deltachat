@@ -76,7 +76,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
-    async def connect(self) -> bool:
+    async def connect(self, **kwargs) -> bool:
         """Start Delta Chat core and connect via IOTransport."""
         accounts_dir = os.path.join(self.config_dir, "accounts")
         if not os.path.isdir(accounts_dir):
