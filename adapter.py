@@ -4,21 +4,27 @@ Hermes Delta Chat Platform Adapter
 Connects Hermes to Delta Chat via the deltachat2 JSON-RPC API.
 Delta Chat core handles IMAP/SMTP and E2EE (Autocrypt) automatically.
 
+Uses the same approach as deltabot-cli: IOTransport starts deltachat-rpc-server
+as a subprocess and communicates via stdio. No password needed — the bot account
+is created with `deltabot-cli init DCACCOUNT:https://nine.testrun.org/new`.
+
 Usage:
-  1. Install: pip install deltabot-cli deltachat2
-  2. Configure: DELTACHAT_ADDR and DELTACHAT_PASSWORD in .env
-  3. Enable in config.yaml: gateway.platforms.deltachat.enabled: true
+  1. Create a bot account:
+     python -c "from deltabot_cli import BotCli; BotCli('hermes-bot').start()" \\
+         init DCACCOUNT:https://nine.testrun.org/new
+
+  2. Get the invite link:
+     python -c "from deltabot_cli import BotCli; BotCli('hermes-bot').start()" link
+
+  3. Set DELTACHAT_CONFIG_DIR in .env (default: ~/.config/hermes-bot)
+  4. Enable in config.yaml: gateway.platforms.deltachat.enabled: true
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -32,164 +38,103 @@ from gateway.config import Platform, PlatformConfig
 
 logger = logging.getLogger(__name__)
 
-# ── Helpers ──────────────────────────────────────────────────────────
-
-def _find_deltachat_core() -> str | None:
-    """Locate the deltachat-rpc-server binary."""
-    # Common locations
-    candidates = [
-        "deltachat-rpc-server",
-        "deltachat-core",
-        "deltachat_rpc_server",
-        # pip-installed entry points
-        str(Path(sys.prefix) / "bin" / "deltachat-rpc-server"),
-        str(Path(sys.prefix) / "bin" / "deltachat-core"),
-        str(Path.home() / ".local" / "bin" / "deltachat-rpc-server"),
-        "/usr/bin/deltachat-rpc-server",
-    ]
-    for c in candidates:
-        try:
-            result = subprocess.run(
-                ["which", c], capture_output=True, text=True, timeout=5
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            continue
-    return None
-
-
-def _ensure_account(addr: str, password: str) -> str | None:
-    """Ensure a Delta Chat account exists, return config dir path."""
-    config_dir = Path.home() / ".config" / "deltachat" / addr
-    config_dir.mkdir(parents=True, exist_ok=True)
-
-    # Write account config
-    ctx_path = config_dir / "context.json"
-    if not ctx_path.exists():
-        ctx = {
-            "addr": addr,
-            "mail_pwd": password,
-            "configured": False,
-            "bot": True,
-        }
-        with open(ctx_path, "w") as f:
-            json.dump(ctx, f, indent=2)
-        logger.info("Created Delta Chat account config: %s", ctx_path)
-
-    return str(config_dir)
-
-
 # ── Adapter ──────────────────────────────────────────────────────────
 
 class DeltaChatAdapter(BasePlatformAdapter):
-    """Hermes platform adapter for Delta Chat."""
+    """Hermes platform adapter for Delta Chat.
+
+    Uses IOTransport from deltachat2 to start deltachat-rpc-server as a
+    subprocess and communicate via JSON-RPC over stdio. The bot account
+    must be pre-configured with `deltabot-cli init`.
+    """
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform("deltachat"))
         extra = config.extra or {}
 
+        # Config directory — where the bot account lives
+        self.config_dir = (
+            os.getenv("DELTACHAT_CONFIG_DIR")
+            or extra.get("config_dir", "")
+            or str(Path.home() / ".config" / "hermes-bot")
+        )
+
+        # Bot address (for display/identification)
         self.addr = (
             os.getenv("DELTACHAT_ADDR") or extra.get("addr", "")
         )
-        self.password = (
-            os.getenv("DELTACHAT_PASSWORD") or extra.get("password", "")
-        )
+
         self.home_channel = (
             os.getenv("DELTACHAT_HOME_CHANNEL") or extra.get("home_channel", "")
         )
 
-        self._core_proc: subprocess.Popen | None = None
         self._rpc: Any = None
+        self._transport: Any = None
         self._poll_task: asyncio.Task | None = None
-        self._config_dir: str | None = None
         self._known_messages: set = set()
+        self._acc_id: int | None = None
 
     # ── Lifecycle ─────────────────────────────────────────────────
 
     async def connect(self) -> bool:
-        """Start Delta Chat core and connect to its JSON-RPC API."""
-        if not self.addr or not self.password:
-            logger.error("DELTACHAT_ADDR and DELTACHAT_PASSWORD must be set")
-            return False
-
-        # Find core binary
-        core_bin = _find_deltachat_core()
-        if not core_bin:
+        """Start Delta Chat core and connect via IOTransport."""
+        accounts_dir = os.path.join(self.config_dir, "accounts")
+        if not os.path.isdir(accounts_dir):
             logger.error(
-                "deltachat-core not found. Install: pip install deltabot-cli"
+                "Delta Chat accounts dir not found: %s. "
+                "Run: python -c \"from deltabot_cli import BotCli; "
+                "BotCli('hermes-bot').start()\" init DCACCOUNT:https://nine.testrun.org/new",
+                accounts_dir,
             )
             return False
 
-        # Ensure account config exists
-        self._config_dir = _ensure_account(self.addr, self.password)
-
-        # Start core process
         try:
-            self._core_proc = subprocess.Popen(
-                [core_bin],
-                env={
-                    **os.environ,
-                    "DC_ACCOUNT_CONFIG_DIR": self._config_dir,
-                },
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except FileNotFoundError:
-            logger.error("Failed to start deltachat-core binary")
-            return False
-
-        # Give core a moment to start
-        await asyncio.sleep(2)
-
-        # Connect via JSON-RPC (core listens on a Unix socket or TCP)
-        # Delta Chat core exposes JSON-RPC on stdout by default
-        # We use the deltachat2 library's RPC client
-        try:
-            from deltachat2.rpc import DeltaChatRpc
+            from deltachat2 import Rpc
+            from deltachat2.transport import IOTransport
         except ImportError:
             logger.error(
                 "deltachat2 not installed. Run: pip install deltachat2"
             )
-            self._stop_core()
             return False
 
         try:
-            self._rpc = DeltaChatRpc()
-            # Connect via the core's JSON-RPC socket
-            # The core creates a socket in the config dir
-            sock_path = Path(self._config_dir) / "rpc.sock"
-            if sock_path.exists():
-                await self._rpc.connect(sock_path)
-            else:
-                # Fall back to TCP on localhost
-                await self._rpc.connect("localhost", 21000)
+            # IOTransport starts deltachat-rpc-server as a subprocess
+            # and communicates via stdio JSON-RPC
+            self._transport = IOTransport(
+                accounts_dir=accounts_dir,
+                rpc_executable="deltachat-rpc-server",
+            )
+            self._rpc = Rpc(self._transport)
 
-            # Get or create account
-            accounts = await self._rpc.get_accounts()
+            # Get the first (and only) account
+            accounts = self._rpc.get_all_account_ids()
             if not accounts:
-                acc_id = await self._rpc.add_account()
-            else:
-                acc_id = accounts[0]
+                logger.error("No Delta Chat accounts found in %s", accounts_dir)
+                self._stop()
+                return False
 
-            # Configure and start
-            await self._rpc.set_config(acc_id, "addr", self.addr)
-            await self._rpc.set_config(acc_id, "mail_pwd", self.password)
-            await self._rpc.set_config(acc_id, "bot", "1")
-            await self._rpc.configure(acc_id)
+            self._acc_id = accounts[0]
 
-            # Start the event loop
-            self._poll_task = asyncio.create_task(self._poll_loop(acc_id))
+            # Start IO (connect to IMAP/SMTP)
+            self._rpc.start_io(self._acc_id)
+
+            # Get bot address if not already set
+            if not self.addr:
+                self.addr = self._rpc.get_config(self._acc_id, "addr") or ""
+
+            # Start the event polling loop
+            self._poll_task = asyncio.create_task(self._poll_loop())
             self._mark_connected()
             logger.info(
-                "Delta Chat connected: %s (account %s)", self.addr, acc_id
+                "Delta Chat connected: %s (account %s)",
+                self.addr or "unknown",
+                self._acc_id,
             )
             return True
 
         except Exception as e:
-            logger.error("Failed to connect to Delta Chat core: %s", e)
-            self._stop_core()
+            logger.error("Failed to connect to Delta Chat: %s", e)
+            self._stop()
             return False
 
     async def disconnect(self) -> None:
@@ -197,30 +142,37 @@ class DeltaChatAdapter(BasePlatformAdapter):
         if self._poll_task:
             self._poll_task.cancel()
             self._poll_task = None
-        self._stop_core()
+        self._stop()
         self._mark_disconnected()
 
-    def _stop_core(self) -> None:
-        if self._core_proc:
+    def _stop(self) -> None:
+        if self._rpc:
             try:
-                self._core_proc.terminate()
-                self._core_proc.wait(timeout=5)
+                if self._acc_id is not None:
+                    self._rpc.stop_io(self._acc_id)
             except Exception:
-                self._core_proc.kill()
-            self._core_proc = None
-        self._rpc = None
+                pass
+            self._rpc = None
+        if self._transport:
+            try:
+                self._transport.close()
+            except Exception:
+                pass
+            self._transport = None
 
     # ── Event polling ──────────────────────────────────────────────
 
-    async def _poll_loop(self, acc_id: int) -> None:
+    async def _poll_loop(self) -> None:
         """Poll for incoming messages from Delta Chat core."""
-        if not self._rpc:
+        if not self._rpc or self._acc_id is None:
             return
 
         while self._running:
             try:
-                # Wait for the next event
-                event = await self._rpc.wait_event(timeout=30)
+                # Wait for the next event (blocking call in thread)
+                event = await asyncio.get_event_loop().run_in_executor(
+                    None, self._rpc.get_next_event, 30
+                )
                 if event is None:
                     continue
 
@@ -229,7 +181,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
                     continue
 
                 # Fetch the message
-                msg = await self._rpc.get_message(acc_id, event.msg_id)
+                msg = self._rpc.get_message(self._acc_id, event.msg_id)
                 if msg is None:
                     continue
 
@@ -239,7 +191,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
                 self._known_messages.add(msg.id)
 
                 # Get chat info
-                chat = await self._rpc.get_chat(acc_id, msg.chat_id)
+                chat = self._rpc.get_basic_chat_info(self._acc_id, msg.chat_id)
                 if chat is None:
                     continue
 
@@ -247,7 +199,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
                 hermes_event = MessageEvent(
                     message_id=str(msg.id),
                     chat_id=str(msg.chat_id),
-                    sender_id=msg.from_id or str(msg.chat_id),
+                    sender_id=str(msg.from_id or msg.chat_id),
                     text=msg.text or "",
                     type=MessageType.TEXT,
                     raw=msg,
@@ -271,24 +223,19 @@ class DeltaChatAdapter(BasePlatformAdapter):
         metadata: dict | None = None,
     ) -> SendResult:
         """Send a text message to a Delta Chat chat."""
-        if not self._rpc:
+        if not self._rpc or self._acc_id is None:
             return SendResult(success=False, error="Not connected")
 
         try:
             from deltachat2 import MsgData
 
-            accounts = await self._rpc.get_accounts()
-            if not accounts:
-                return SendResult(success=False, error="No account")
-
-            acc_id = accounts[0]
             msg_data = MsgData(text=content)
 
             if reply_to:
                 msg_data.quote_id = int(reply_to)
 
-            msg_id = await self._rpc.send_msg(
-                acc_id, int(chat_id), msg_data
+            msg_id = self._rpc.send_msg(
+                self._acc_id, int(chat_id), msg_data
             )
             return SendResult(
                 success=True,
@@ -305,18 +252,16 @@ class DeltaChatAdapter(BasePlatformAdapter):
 
     async def get_chat_info(self, chat_id: str) -> dict:
         """Get chat metadata."""
-        if not self._rpc:
+        if not self._rpc or self._acc_id is None:
             return {"name": chat_id, "type": "dm"}
 
         try:
-            accounts = await self._rpc.get_accounts()
-            if accounts:
-                chat = await self._rpc.get_chat(accounts[0], int(chat_id))
-                if chat:
-                    return {
-                        "name": chat.name or chat_id,
-                        "type": "group" if chat.is_group else "dm",
-                    }
+            chat = self._rpc.get_basic_chat_info(self._acc_id, int(chat_id))
+            if chat:
+                return {
+                    "name": chat.name or chat_id,
+                    "type": "group" if getattr(chat, "is_group", False) else "dm",
+                }
         except Exception:
             pass
 
@@ -327,9 +272,12 @@ class DeltaChatAdapter(BasePlatformAdapter):
 
 def check_requirements() -> bool:
     """Check if Delta Chat dependencies are available."""
-    addr = os.getenv("DELTACHAT_ADDR", "").strip()
-    password = os.getenv("DELTACHAT_PASSWORD", "").strip()
-    if not (addr and password):
+    config_dir = os.getenv("DELTACHAT_CONFIG_DIR", "")
+    if not config_dir:
+        config_dir = str(Path.home() / ".config" / "hermes-bot")
+    accounts_dir = os.path.join(config_dir, "accounts")
+
+    if not os.path.isdir(accounts_dir):
         return False
 
     try:
@@ -342,19 +290,26 @@ def check_requirements() -> bool:
 def validate_config(config) -> bool:
     """Validate platform configuration."""
     extra = getattr(config, "extra", None) or {}
-    addr = os.getenv("DELTACHAT_ADDR") or extra.get("addr", "")
-    password = os.getenv("DELTACHAT_PASSWORD") or extra.get("password", "")
-    return bool(addr and password)
+    config_dir = (
+        os.getenv("DELTACHAT_CONFIG_DIR")
+        or extra.get("config_dir", "")
+        or str(Path.home() / ".config" / "hermes-bot")
+    )
+    accounts_dir = os.path.join(config_dir, "accounts")
+    return os.path.isdir(accounts_dir)
 
 
 def _env_enablement() -> dict | None:
     """Seed PlatformConfig.extra from env vars."""
-    addr = os.getenv("DELTACHAT_ADDR", "").strip()
-    password = os.getenv("DELTACHAT_PASSWORD", "").strip()
-    if not (addr and password):
+    config_dir = os.getenv("DELTACHAT_CONFIG_DIR", "").strip()
+    if not config_dir:
+        config_dir = str(Path.home() / ".config" / "hermes-bot")
+
+    accounts_dir = os.path.join(config_dir, "accounts")
+    if not os.path.isdir(accounts_dir):
         return None
 
-    seed = {"addr": addr, "password": password}
+    seed = {"config_dir": config_dir}
     home = os.getenv("DELTACHAT_HOME_CHANNEL", "").strip()
     if home:
         seed["home_channel"] = {"chat_id": home, "name": "Home"}
@@ -369,8 +324,16 @@ def register(ctx):
         adapter_factory=lambda cfg: DeltaChatAdapter(cfg),
         check_fn=check_requirements,
         validate_config=validate_config,
-        required_env=["DELTACHAT_ADDR", "DELTACHAT_PASSWORD"],
-        install_hint="pip install deltabot-cli deltachat2",
+        required_env=["DELTACHAT_CONFIG_DIR"],
+        install_hint=(
+            "1. pip install deltabot-cli deltachat2\n"
+            "2. Create bot account:\n"
+            "   python -c \"from deltabot_cli import BotCli; "
+            "BotCli('hermes-bot').start()\" init DCACCOUNT:https://nine.testrun.org/new\n"
+            "3. Get invite link:\n"
+            "   python -c \"from deltabot_cli import BotCli; "
+            "BotCli('hermes-bot').start()\" link"
+        ),
         env_enablement_fn=_env_enablement,
         cron_deliver_env_var="DELTACHAT_HOME_CHANNEL",
         allowed_users_env="DELTACHAT_ALLOWED_USERS",

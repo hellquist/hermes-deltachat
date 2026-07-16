@@ -5,15 +5,17 @@ version: 1.0.0
 description: Delta Chat platform adapter for Hermes — E2EE messaging over email (Autocrypt)
 author: hellquist
 requires_env:
-  - name: DELTACHAT_ADDR
-    description: "Delta Chat / chatmail email address"
-    prompt: "Email address"
+  - name: DELTACHAT_CONFIG_DIR
+    description: "Path to bot config directory (default: ~/.config/hermes-bot)"
+    prompt: "Config directory"
     password: false
-  - name: DELTACHAT_PASSWORD
-    description: "Delta Chat / chatmail password"
-    prompt: "Password"
-    password: true
 optional_env:
+  - name: DELTACHAT_ADDR
+    description: "Bot email address (for display, auto-detected if omitted)"
+    password: false
   - name: DELTACHAT_HOME_CHANNEL
     description: "Default channel for cron delivery (your email address)"
+    password: false
+  - name: DELTACHAT_ALLOWED_USERS
+    description: "Comma-separated email addresses allowed to chat with the bot"
     password: false
