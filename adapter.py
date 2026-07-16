@@ -172,7 +172,7 @@ class DeltaChatAdapter(BasePlatformAdapter):
             try:
                 # Wait for the next event (blocking call in thread)
                 event = await asyncio.get_event_loop().run_in_executor(
-                    None, self._rpc.get_next_event, 30
+                    None, self._rpc.get_next_event
                 )
                 if event is None:
                     continue
