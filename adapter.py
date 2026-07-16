@@ -40,6 +40,8 @@ from gateway.platforms.base import (
 )
 from gateway.config import Platform, PlatformConfig
 
+from deltachat2.types import EventTypeIncomingMsg
+
 logger = logging.getLogger(__name__)
 
 # Default config directory — no env vars needed
@@ -178,11 +180,11 @@ class DeltaChatAdapter(BasePlatformAdapter):
                     continue
 
                 # We only care about incoming messages
-                if event.kind != "DC_EVENT_INCOMING_MSG":
+                if not isinstance(event.event, EventTypeIncomingMsg):
                     continue
 
                 # Fetch the message
-                msg = self._rpc.get_message(self._acc_id, event.msg_id)
+                msg = self._rpc.get_message(self._acc_id, event.event.msg_id)
                 if msg is None:
                     continue
 
